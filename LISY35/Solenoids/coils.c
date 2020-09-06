@@ -17,8 +17,9 @@
 
 #include "fifo_coils.h"
 #include "eeprom.h"
+#include "interrupt_delay.h"
 
-int lisy35_coil_version = 418; //LISY35 COIL Version
+int lisy35_coil_version = 499; //LISY35 COIL Version  // Development build
 
 /* global definitions */         
 volatile uint8_t data_slave;  
@@ -265,6 +266,11 @@ void __interrupt(low_priority) low_prio_Isr(void) {
             
     INTCON3bits.INT1IF = 0; // clear this interrupt condition
   }     
+  if(PIE1bits.TMR2IE == 1 && PIR1bits.TMR2IF == 1)
+  {
+    // Handle interrupt for timer2 for the interruptable delay
+    TMR2_ISR();
+  }
 }
     
 /* interrut service routine NEW from AN734 */
@@ -312,6 +318,10 @@ void __interrupt(high_priority) myIsr(void)
 				SSPCON1bits.CKP = 1;    		// release CLK
             }
     	}
+        // this means it's time for the next command, thus stop the interruptable delay in sound_data_standard
+        interrupt_delay();
+        // Of course this is too often, but a single command to turn off tmr2 is probably quicker 
+        // than to always check whether it is necessary.
     }
     if(BCLIF)                       // Did a bus collision occur?
     {
@@ -514,7 +524,13 @@ void sound_data_standard(unsigned char value)
     // so interrupts do not change much
     ei();     
     //let data stable for 18 milliseconds(33ms according to trace)
-    __delay_ms(18);          
+    //__delay_ms(18);         
+    
+    // NEW
+    // instead use interruptable delay. In most cases, this will play the melody as planned, 
+    //but when new commands arrive fast enough, this gets cut short.
+    delay_18ms_interruptable();
+    
     // and set data back to rest address
     MOM_SOL_SOUND_DATA_A = MOM_SOL_SOUND_DATA_B = MOM_SOL_SOUND_DATA_C = MOM_SOL_SOUND_DATA_D = 1;   
  }//cooked mode      
@@ -734,7 +750,8 @@ OSCCONbits.OSTS = 0;
 //OSCCONbits.SCS = 0;
 OSCCONbits.SCS = 3; //RTH: 64MHz still need to be tested
 //Internal oscillator block "OSCCONbits.SCS = 3;"does not work with PLL
-OSCTUNEbits.PLLEN = 1;      // turn on the PLL 16*4
+//OSCTUNEbits.PLLEN = 1;      // turn on the PLL 16*4
+OSCTUNEbits.PLLEN = 0;      // turn OFF the PLL
 // Wait until PLL is ready
 //while(!OSCCON2bits.PLLRDY); 
 
@@ -812,6 +829,9 @@ INTCON2bits.INTEDG1 = 0; //INT1 on falling edge
 INTCON3bits.INT1IP = 0, //INT1 External Interrupt Priority bit, low prio
 INTCON3bits.INT1IF = 0;  //INT1 External Interrupt Flag bit cleared
 INTCON3bits.INT1IE = 1; //INT1 External Interrupt Enable bit
+
+// initialize timer2 for the interruptable delay
+TMR2_Initialize();
 
 //local vars
 bitv_t k3;
