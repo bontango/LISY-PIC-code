@@ -8,8 +8,8 @@
  */
 
 //no warnings about 'implicite signed to unsigned conversion'
-#pragma warning push
-#pragma warning disable 373
+//#pragma warning push
+//#pragma warning disable 373
 
 #include "def_coils.h"
 #include <stdint.h>
@@ -19,7 +19,7 @@
 #include "eeprom.h"
 #include "interrupt_delay.h"
 
-int lisy35_coil_version = 499; //LISY35 COIL Version  // Development build
+int lisy35_coil_version = 419; //LISY35 COIL Version  
 
 /* global definitions */         
 volatile uint8_t data_slave;  
@@ -277,6 +277,12 @@ void __interrupt(low_priority) low_prio_Isr(void) {
 void __interrupt(high_priority) myIsr(void)
 {
     uint8_t junk;
+    union isr_two {
+    unsigned char byte;
+    struct {
+    unsigned COMMAND:3, b0:1, b1:1, b2:1, b3:1, IS_CMD:1;
+        } bitv;  
+    } isr_data; 
     
     if(SSPIF)                               // check to see if SSP interrupt
     {
@@ -308,8 +314,21 @@ void __interrupt(high_priority) myIsr(void)
             }
             if(SSPSTATbits.D_nA)                // last byte was data (D_nA = 1)
             {
-                //put byte from master to Buffer, interpret in main
-            	BufferIn ( SSP1BUF );
+                //check if we have a solenoid cmd which has to be executed immidiatly
+                isr_data.byte = SSP1BUF;
+                if (( isr_data.bitv.IS_CMD == 1 ) & ( (isr_data.bitv.COMMAND) == LS35COIL_MOM_SOL ))
+                {
+                    SOUNDSELECT = SOLENOIDS_SELECTED;
+                    //in 'solenoid' mode just pass data   
+                    MOM_SOL_SOUND_DATA_A = isr_data.bitv.b0;
+                    MOM_SOL_SOUND_DATA_B = isr_data.bitv.b1;
+                    MOM_SOL_SOUND_DATA_C = isr_data.bitv.b2;
+                    MOM_SOL_SOUND_DATA_D = isr_data.bitv.b3;    
+                    interrupt_delay(); //cancel a possible running sound command
+                }
+                else //put byte from master to Buffer, interpret in main                                
+                BufferIn ( isr_data.byte );                                                
+                
 				if(SSPCON1bits.WCOL)		// Did a write collision occur?
 				{
                     SSPCON1bits.WCOL = 0;       // clear WCOL bit
@@ -318,10 +337,6 @@ void __interrupt(high_priority) myIsr(void)
 				SSPCON1bits.CKP = 1;    		// release CLK
             }
     	}
-        // this means it's time for the next command, thus stop the interruptable delay in sound_data_standard
-        interrupt_delay();
-        // Of course this is too often, but a single command to turn off tmr2 is probably quicker 
-        // than to always check whether it is necessary.
     }
     if(BCLIF)                       // Did a bus collision occur?
     {
@@ -353,24 +368,16 @@ void lamp_set( int lamp, int action) {
   //see for what board the lamp activity is for
   if (lampboard_active == 0)  
   {    
-    switch(lamp)
+    if (action)
     {
-        case 0 ... 14: //decoder 1 PD0 which is bit4
-            inhibit[lamp].bitv.b4 = inhibit_bit;           
-            break;
-        case 15 ... 29: //decoder 2 PD1 which is bit5
-            lamp = lamp-15;
-            inhibit[lamp].bitv.b5 = inhibit_bit;           
-            break;
-        case 30 ... 44: //decoder 3 PD2 which is bit6
-            lamp = lamp-30;
-            inhibit[lamp].bitv.b6 = inhibit_bit;           
-            break;
-        case 45 ... 59: //decoder 4 PD3 which is bit7
-            lamp = lamp-45;
-            inhibit[lamp].bitv.b7 = inhibit_bit;           
-            break;                
-          }    
+        // Clear the bit to turn lamp off
+        inhibit[lamp % 15].byte &= ~(1 << (4 + lamp / 15));
+    }
+    else
+    {
+        // Set the bit to turn lamp on
+        inhibit[lamp % 15].byte |= 1 << (4 + lamp / 15);
+    }
   }
   else if(lampboard_active == 1)  
   {
